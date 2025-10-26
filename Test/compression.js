@@ -1,364 +1,89 @@
+// 依賴：先載入 fflate.js（提供 gzip/gunzip 與字串/位元組轉換）
+
 (function (global) {
-  const helper = {};
-  const DEFAULT_CHUNK_SIZE = 4800;
-  const DEFAULT_MODE = 'lzma/base64';
-  const LEGACY_GZIP_MODE = 'gzip/base64';
-  const textEncoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
-  const textDecoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+    "use strict";
 
-  const LZW_EOF_CODE = 256;
-  const LZW_INITIAL_WIDTH = 9;
-  const LZW_MAX_WIDTH = 16;
+    // ===== Base91 編碼/解碼（只用可列印 ASCII，安全存到 Segment） =====
+    const BASE91_TABLE =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" +
+        "!#$%&()*+,./:;<=>?@[]^_`{|}~\"";
+    const BASE91_DICT = Object.fromEntries([...BASE91_TABLE].map((c, i) => [c, i]));
 
-  function chunkString(text, size) {
-    if (typeof text !== 'string' || !text) {
-      return [];
-    }
-
-    const chunks = [];
-    for (let index = 0; index < text.length; index += size) {
-      chunks.push(text.slice(index, index + size));
-    }
-    return chunks;
-  }
-
-  function uint8ToBase64(bytes) {
-    if (!bytes || bytes.length === 0) {
-      return '';
-    }
-
-    let binary = '';
-    const chunkSize = 0x8000;
-    for (let index = 0; index < bytes.length; index += chunkSize) {
-      const chunk = bytes.subarray(index, index + chunkSize);
-      binary += String.fromCharCode.apply(null, chunk);
-    }
-    return btoa(binary);
-  }
-
-  function base64ToUint8(base64) {
-    if (typeof base64 !== 'string' || !base64) {
-      return new Uint8Array(0);
-    }
-
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  }
-
-  function encodeUtf8(text) {
-    if (textEncoder) {
-      return textEncoder.encode(text);
-    }
-
-    if (typeof text !== 'string' || !text) {
-      return new Uint8Array(0);
-    }
-
-    const encoded = unescape(encodeURIComponent(text));
-    const bytes = new Uint8Array(encoded.length);
-    for (let index = 0; index < encoded.length; index += 1) {
-      bytes[index] = encoded.charCodeAt(index);
-    }
-    return bytes;
-  }
-
-  function decodeUtf8(bytes) {
-    if (textDecoder) {
-      return textDecoder.decode(bytes);
-    }
-
-    if (!bytes || bytes.length === 0) {
-      return '';
-    }
-
-    let binary = '';
-    for (let index = 0; index < bytes.length; index += 1) {
-      binary += String.fromCharCode(bytes[index]);
-    }
-
-    try {
-      return decodeURIComponent(escape(binary));
-    } catch (err) {
-      console.warn('UTF-8 解碼失敗，使用備援結果:', err);
-      return binary;
-    }
-  }
-
-  function generateLzwCodes(sourceBytes) {
-    if (!sourceBytes || sourceBytes.length === 0) {
-      return [];
-    }
-
-    const dictionary = new Map();
-    for (let i = 0; i < 256; i += 1) {
-      dictionary.set(String.fromCharCode(i), i);
-    }
-
-    let nextCode = LZW_EOF_CODE + 1;
-    let codeWidth = LZW_INITIAL_WIDTH;
-    const codes = [];
-
-    let phrase = String.fromCharCode(sourceBytes[0]);
-
-    for (let index = 1; index < sourceBytes.length; index += 1) {
-      const char = String.fromCharCode(sourceBytes[index]);
-      const combined = phrase + char;
-
-      if (dictionary.has(combined)) {
-        phrase = combined;
-        continue;
-      }
-
-      codes.push({ code: dictionary.get(phrase), width: codeWidth });
-
-      if (nextCode < (1 << LZW_MAX_WIDTH)) {
-        dictionary.set(combined, nextCode);
-        nextCode += 1;
-        if (nextCode === (1 << codeWidth) && codeWidth < LZW_MAX_WIDTH) {
-          codeWidth += 1;
+    /** 將位元組（Uint8Array）編成 Base91 文字 */
+    function base91Encode(bytes) {
+        let b = 0, n = 0, out = "";
+        for (let i = 0; i < bytes.length; i++) {
+            b |= bytes[i] << n; n += 8;
+            if (n > 13) {
+                let v = b & 8191;
+                if (v > 88) { b >>= 13; n -= 13; }
+                else { v = b & 16383; b >>= 14; n -= 14; }
+                out += BASE91_TABLE[v % 91] + BASE91_TABLE[Math.floor(v / 91)];
+            }
         }
-      }
-
-      phrase = char;
+        if (n) out += BASE91_TABLE[b % 91] + (n > 7 || b > 90 ? BASE91_TABLE[Math.floor(b / 91)] : "");
+        return out;
     }
 
-    if (phrase) {
-      codes.push({ code: dictionary.get(phrase), width: codeWidth });
-    }
-
-    codes.push({ code: LZW_EOF_CODE, width: codeWidth });
-    return codes;
-  }
-
-  function packCodesToBytes(codes) {
-    if (!codes || codes.length === 0) {
-      return new Uint8Array(0);
-    }
-
-    const output = [];
-    let buffer = 0;
-    let bitsInBuffer = 0;
-
-    for (let index = 0; index < codes.length; index += 1) {
-      const { code, width } = codes[index];
-      buffer = (buffer << width) | code;
-      bitsInBuffer += width;
-
-      while (bitsInBuffer >= 8) {
-        bitsInBuffer -= 8;
-        output.push((buffer >> bitsInBuffer) & 0xff);
-        buffer &= (1 << bitsInBuffer) - 1;
-      }
-    }
-
-    if (bitsInBuffer > 0) {
-      output.push((buffer << (8 - bitsInBuffer)) & 0xff);
-    }
-
-    return new Uint8Array(output);
-  }
-
-  function unpackBytesToCodes(bytes) {
-    if (!bytes || bytes.length === 0) {
-      return [];
-    }
-
-    let index = 0;
-    let current = 0;
-    let bitsRemaining = 0;
-    const codes = [];
-    let codeWidth = LZW_INITIAL_WIDTH;
-    let nextCode = LZW_EOF_CODE + 1;
-
-    function readBits(length) {
-      let value = 0;
-      for (let i = 0; i < length; i += 1) {
-        if (bitsRemaining === 0) {
-          if (index >= bytes.length) {
-            return null;
-          }
-          current = bytes[index];
-          index += 1;
-          bitsRemaining = 8;
+    /** 將 Base91 文字解成位元組（Uint8Array） */
+    function base91Decode(str) {
+        let b = 0, n = 0, out = [], v = -1;
+        for (let i = 0; i < str.length; i++) {
+            const code = BASE91_DICT[str[i]];
+            if (code === undefined) continue;
+            if (v < 0) v = code;
+            else {
+                v += code * 91;
+                b |= v << n; n += (v & 8191) > 88 ? 13 : 14;
+                do { out.push(b & 255); b >>= 8; n -= 8; } while (n > 7);
+                v = -1;
+            }
         }
-
-        bitsRemaining -= 1;
-        value = (value << 1) | ((current >> bitsRemaining) & 1);
-      }
-      return value;
+        if (v + 1) out.push((b | (v << n)) & 255);
+        return new Uint8Array(out);
     }
 
-    while (true) {
-      const value = readBits(codeWidth);
-      if (value === null) {
-        break;
-      }
+    // ===== GZIP + Base91：壓縮/解壓 =====
 
-      codes.push({ code: value, width: codeWidth });
-
-      if (value === LZW_EOF_CODE) {
-        break;
-      }
-
-      if (nextCode < (1 << LZW_MAX_WIDTH)) {
-        nextCode += 1;
-        if (nextCode === (1 << codeWidth) && codeWidth < LZW_MAX_WIDTH) {
-          codeWidth += 1;
-        }
-      }
+    /**
+     * 壓縮成可儲存於 Twitch Segment 的字串
+     * @param {string} text 原始文字（UTF-8）
+     * @returns {{encoded: string, binaryLength: number, encoding: 'base91', algo: 'gzip'}}
+     */
+    function compressToStorableString(text) {
+        // 文字 → UTF-8 位元組 → GZIP → Base91
+        const u8 = fflate.strToU8(text);                      // UTF-8 編碼
+        const gz = fflate.gzipSync(u8);                       // GZIP 壓縮
+        const encoded = base91Encode(gz);                     // Base91 文字
+        return {
+            encodedString: encoded,
+            originalLength: u8.length,
+            compressedLength: gz.length,
+            encoding: 'base91'
+            , algo: 'gzip'
+        };
     }
 
-    return codes;
-  }
-
-  function reconstructBytesFromCodes(codes) {
-    if (!codes || codes.length === 0) {
-      return new Uint8Array(0);
+    /**
+     * 從可儲存字串解壓回原文字
+     * @param {string} encoded 透過 compressToStorableString 產生的 Base91 文字
+     * @returns {string} 原始文字（UTF-8）
+     */
+    function decompressFromStorableString(encoded) {
+        // Base91 → GUNZIP → 文字
+        const gz = base91Decode(encoded);
+        const u8 = fflate.gunzipSync(gz);
+        return fflate.strFromU8(u8);
     }
 
-    const dictionary = new Array(1 << LZW_MAX_WIDTH);
-    for (let i = 0; i < 256; i += 1) {
-      dictionary[i] = String.fromCharCode(i);
-    }
+    // 導出到全域（避免模組化複雜度）
+    global.CompressionHelper = {
+        // 壓縮/解壓（主要給 admin/overlay 用）
+        compressToStorableString,
+        decompressFromStorableString,
 
-    const firstCode = codes[0]?.code;
-    if (typeof firstCode !== 'number' || firstCode === LZW_EOF_CODE) {
-      return new Uint8Array(0);
-    }
-
-    let nextCode = LZW_EOF_CODE + 1;
-    let previous = dictionary[firstCode] || '';
-    const output = [previous];
-
-    for (let index = 1; index < codes.length; index += 1) {
-      const { code } = codes[index];
-      if (code === LZW_EOF_CODE) {
-        break;
-      }
-
-      let entry;
-      if (dictionary[code] != null) {
-        entry = dictionary[code];
-      } else if (code === nextCode) {
-        entry = previous + previous.charAt(0);
-      } else {
-        throw new Error('Invalid LZW code encountered');
-      }
-
-      output.push(entry);
-
-      if (nextCode < (1 << LZW_MAX_WIDTH)) {
-        dictionary[nextCode] = previous + entry.charAt(0);
-        nextCode += 1;
-      }
-
-      previous = entry;
-    }
-
-    let totalLength = 0;
-    for (let i = 0; i < output.length; i += 1) {
-      totalLength += output[i].length;
-    }
-
-    const bytes = new Uint8Array(totalLength);
-    let offset = 0;
-    for (let i = 0; i < output.length; i += 1) {
-      const fragment = output[i];
-      for (let j = 0; j < fragment.length; j += 1) {
-        bytes[offset] = fragment.charCodeAt(j);
-        offset += 1;
-      }
-    }
-
-    return bytes;
-  }
-
-  async function compressToBase64(text) {
-    if (typeof text !== 'string') {
-      return null;
-    }
-
-    const utf8Bytes = encodeUtf8(text);
-    if (!utf8Bytes || utf8Bytes.length === 0) {
-      return {
-        base64: '',
-        originalLength: 0,
-        compressedLength: 0,
-        compressedByteLength: 0,
-        mode: DEFAULT_MODE
-      };
-    }
-
-    try {
-      const codes = generateLzwCodes(utf8Bytes);
-      if (!codes || codes.length === 0) {
-        return null;
-      }
-
-      const compressedBytes = packCodesToBytes(codes);
-      const base64 = uint8ToBase64(compressedBytes);
-      return {
-        base64,
-        originalLength: utf8Bytes.length,
-        compressedLength: base64.length,
-        compressedByteLength: compressedBytes.length,
-        mode: DEFAULT_MODE
-      };
-    } catch (err) {
-      console.warn('LZW 壓縮失敗，將回退為未壓縮模式:', err);
-      return null;
-    }
-  }
-
-  async function decompressGzip(base64) {
-    const bytes = base64ToUint8(base64);
-    if (bytes.length === 0) {
-      return '';
-    }
-
-    if (typeof DecompressionStream === 'function') {
-      const stream = new DecompressionStream('gzip');
-      const writer = stream.writable.getWriter();
-      await writer.write(bytes);
-      await writer.close();
-      const response = new Response(stream.readable);
-      const buffer = await response.arrayBuffer();
-      return decodeUtf8(new Uint8Array(buffer));
-    }
-
-    throw new Error('瀏覽器不支援 Gzip 解壓縮');
-  }
-
-  async function decompressFromBase64(base64, mode = DEFAULT_MODE) {
-    if (typeof base64 !== 'string' || !base64) {
-      return '';
-    }
-
-    if (mode === LEGACY_GZIP_MODE) {
-      return decompressGzip(base64);
-    }
-
-    try {
-      const compressed = base64ToUint8(base64);
-      const codes = unpackBytesToCodes(compressed);
-      const decompressed = reconstructBytesFromCodes(codes);
-      return decodeUtf8(decompressed);
-    } catch (err) {
-      console.warn('LZW 解壓縮失敗:', err);
-      throw err;
-    }
-  }
-
-  helper.MAX_CHUNK_SIZE = DEFAULT_CHUNK_SIZE;
-  helper.COMPRESSION_MODE = DEFAULT_MODE;
-  helper.LEGACY_GZIP_MODE = LEGACY_GZIP_MODE;
-  helper.compressToBase64 = compressToBase64;
-  helper.decompressFromBase64 = decompressFromBase64;
-  helper.chunkString = (text, size = DEFAULT_CHUNK_SIZE) => chunkString(text, size);
-
-  global.CompressionHelper = helper;
-}(typeof window !== 'undefined' ? window : globalThis));
+        // 若未來要換 Brotli、Base64 等，可在此擴充，不影響呼叫端
+        _base91Encode: base91Encode,
+        _base91Decode: base91Decode
+    };
+})(window);

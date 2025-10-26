@@ -1,137 +1,101 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <title>Gzip + Key Mapping + Minify 壓縮測試 (雙向還原)</title>
-  <style>
-    body { background: #111; color: #eee; font-family: Consolas, monospace; padding: 20px; }
-    h1 { color: #0ff; }
-    textarea { width: 100%; height: 200px; background: #222; color: #eee; border: 1px solid #444; padding: 8px; font-family: Consolas; }
-    button { background: #0ff; color: #111; padding: 10px 20px; border: none; cursor: pointer; font-weight: bold; margin: 10px 0; }
-    button:hover { background: #0cc; }
-    .box { background: #222; border: 1px solid #444; padding: 10px; margin: 10px 0; white-space: pre-wrap; word-break: break-all; }
-  </style>
-</head>
-<body>
-  <h1>🔥 Gzip + Key Mapping 壓縮測試（可還原原始 key）</h1>
-
-  <p>請貼上你要測試的 JSON：</p>
-  <textarea id="jsonInput" placeholder="貼上 JSON..."></textarea><br>
-  <button id="compressBtn">🚀 開始壓縮測試</button>
-
-  <div id="info" class="box">等待輸入中...</div>
-  <h3>壓縮後 Base64</h3>
-  <div id="comp" class="box"></div>
-  <h3>解壓後 JSON</h3>
-  <div id="restored" class="box"></div>
-
-  <script>
-    const el = id => document.getElementById(id);
-
-    // ✅ Key 映射表（雙向）
-    const keyMap = {
-      name: 'n', ability: 'a', team: 't', description: 'd',
-      image: 'i', type: 'y', category: 'c', alignment: 'm',
-      script: 's', role: 'r', id: 'x'
-    };
-    const reverseMap = Object.fromEntries(Object.entries(keyMap).map(([k,v]) => [v,k]));
-
-    // ✅ 短 key 轉換
-    function remapKeys(obj) {
-      if (Array.isArray(obj)) return obj.map(remapKeys);
-      if (typeof obj === 'object' && obj) {
-        const out = {};
-        for (const [k, v] of Object.entries(obj))
-          out[keyMap[k] || k] = remapKeys(v);
-        return out;
-      }
-      return obj;
-    }
-
-    // ✅ 復原 key 名稱
-    function restoreKeys(obj) {
-      if (Array.isArray(obj)) return obj.map(restoreKeys);
-      if (typeof obj === 'object' && obj) {
-        const out = {};
-        for (const [k, v] of Object.entries(obj))
-          out[reverseMap[k] || k] = restoreKeys(v);
-        return out;
-      }
-      return obj;
-    }
-
-    // ✅ Gzip 壓縮
-    async function gzipCompress(str) {
-      const cs = new CompressionStream("deflate");
-      const writer = cs.writable.getWriter();
-      writer.write(new TextEncoder().encode(str));
-      writer.close();
-      const compressed = await new Response(cs.readable).arrayBuffer();
-      return btoa(String.fromCharCode(...new Uint8Array(compressed)));
-    }
-
-    // ✅ Gzip 解壓
-    async function gzipDecompress(base64) {
-      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-      const ds = new DecompressionStream("deflate");
-      const writer = ds.writable.getWriter();
-      writer.write(bytes);
-      writer.close();
-      const decompressed = await new Response(ds.readable).arrayBuffer();
-      return new TextDecoder().decode(decompressed);
-    }
-
-    async function runCompressionTest() {
-      const input = el("jsonInput").value.trim();
-      if (!input) {
-        el("info").textContent = "⚠️ 請先輸入 JSON 內容";
-        return;
-      }
-
-      el("info").textContent = "🗜️ 正在壓縮中...";
-      let jsonText = input;
-      let originalParsed = null;
-      try {
-        originalParsed = JSON.parse(input);
-        const remapped = remapKeys(originalParsed);
-        jsonText = JSON.stringify(remapped);
-      } catch (e) {
-        console.warn("輸入不是合法 JSON，將以純文字壓縮");
-      }
-
-      try {
-        const compressed = await gzipCompress(jsonText);
-        const restored = await gzipDecompress(compressed);
-
-        let restoredParsed, restoredFinal;
-        try {
-          restoredParsed = JSON.parse(restored);
-          restoredFinal = JSON.stringify(restoreKeys(restoredParsed), null, 2);
-        } catch (e) {
-          restoredFinal = restored;
+    <meta charset="UTF-8" />
+    <title>模擬 Twitch 上傳驗證 — GZIP + Base91 測試</title>
+    <script src="./fflate.js"></script>
+    <script src="./compression.js"></script>
+    <style>
+        body {
+            background: #0b0b0b;
+            color: #eee;
+            font-family: "Microsoft JhengHei",sans-serif;
+            padding: 20px;
         }
 
-        const encoder = new TextEncoder();
-        const originalBytes = encoder.encode(JSON.stringify(originalParsed)).length;
-        const compressedBytes = compressed.length;
-        const ratio = ((compressedBytes / originalBytes) * 100).toFixed(1);
-        const identical = JSON.stringify(originalParsed) === JSON.stringify(JSON.parse(restoredFinal));
+        textarea {
+            width: 100%;
+            height: 220px;
+            font-family: monospace;
+            background: #111;
+            color: #eee;
+            border: 1px solid #333;
+            padding: 8px;
+        }
 
-        el("info").textContent =
-          `原始大小：${originalBytes} bytes\n` +
-          `壓縮後大小：${compressedBytes} bytes\n` +
-          `壓縮率：${ratio}%\n` +
-          `是否正確還原：${identical ? "✅ 是" : "❌ 否"}`;
+        button {
+            margin: 8px 0;
+            padding: 8px 14px;
+            font-size: 14px;
+        }
 
-        el("comp").textContent = compressed;
-        el("restored").textContent = restoredFinal;
-      } catch (err) {
-        console.error("壓縮或解壓失敗：", err);
-        el("info").textContent = "❌ 錯誤：" + err.message;
-      }
-    }
+        .box {
+            background: #111;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            margin: 10px 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <h1>模擬 Twitch Configuration 上傳（GZIP + Base91）</h1>
+    <p>貼入 JSON → Key Minify → GZIP 壓縮 → Base91 編碼 → 檢查是否通過 5KB 限制並可還原。</p>
 
-    el("compressBtn").addEventListener("click", runCompressionTest);
-  </script>
+    <textarea id="jsonInput" placeholder="請貼上 JSON…">
+    </textarea>
+    <br>
+    <button id="runBtn">🔧 壓縮並模擬上傳</button>
+
+    <h3>結果</h3>
+    <div id="output" class="box">尚未執行</div>
+    <h3>解壓後 JSON</h3>
+    <textarea id="jsonOutput" disabled>
+    </textarea>
+
+    <script>
+        // ------- 模擬 Twitch 檢查（UTF-8 長度 / 控制字元 / 5KB） -------
+        function simulateTwitchChecks(str) {
+            const enc = new TextEncoder(); const bytes = enc.encode(str);
+            const segLimit = 5000;
+            // 禁止 0-31 控制字元（允許 9,10,13）
+            const bad = [];
+            for (let i = 0; i < bytes.length; i++) {
+                const c = bytes[i];
+                if (c >= 0 && c <= 31 && c !== 9 && c !== 10 && c !== 13) bad.push({ i, c });
+            }
+            return { lengthBytes: bytes.length, within: bytes.length <= segLimit, bad, segLimit };
+        }
+
+        // ------- 主流程 -------
+        document.getElementById("runBtn").addEventListener("click", () => {
+            const raw = document.getElementById("jsonInput").value.trim();
+            const out = document.getElementById("output");
+            const restoredOut = document.getElementById("jsonOutput");
+
+            if (!raw) { out.textContent = "⚠️ 請先輸入 JSON"; return; }
+            try {
+                const obj = JSON.parse(raw);                            // 驗證合法 JSON
+                const compress = window.CompressionHelper.compressToStorableString(JSON.stringify(obj));
+                const encoded = compress.encodedString;
+                const chk = simulateTwitchChecks(encoded);              // 模擬上傳檢查
+                const restoredObj = JSON.parse(window.CompressionHelper.decompressFromStorableString(encoded));
+                const ok = JSON.stringify(restoredObj) === JSON.stringify(obj);
+                out.textContent =
+                    `原始大小：${compress.originalLength} bytes
+                       Base91 字串長度（上傳長度）：${compress.compressedLength} bytes
+
+                      Twitch 模擬檢查（上限 ${chk.segLimit} bytes）：
+                      • 是否在限制內：${chk.within ? "✅ 是" : "❌ 否"}
+                      • 控制字元數：${chk.bad.length}
+                      • 還原驗證：${ok ? "✅ 正確還原" : "❌ 還原失敗"}`;
+                restoredOut.value = JSON.stringify(restoredObj, null, 2);
+            } catch (e) {
+                out.textContent = "錯誤：輸入不是合法 JSON 或處理失敗。\n" + e.message;
+            }
+        });
+    </script>
 </body>
 </html>

@@ -128,12 +128,12 @@ async function decompressBase64WithCache(base64) {
     return request;
 }
 
-async function compressCustomJson(normalizedJson) {
+function compressCustomJson(normalizedJson) {
     try {
         console.info('[Compression] 開始壓縮自訂劇本...');
 
         // 使用新版 compression.js 的壓縮方法
-        const result = await CompressionHelper.compressToStorableString(normalizedJson);
+        const result = window.CompressionHelper.compressToStorableString(normalizedJson);
 
         if (!result || typeof result.encodedString !== 'string') {
             throw new Error('壓縮結果無效或為空');
@@ -147,7 +147,7 @@ async function compressCustomJson(normalizedJson) {
         return {
             base64: result.encodedString,
             originalLength: result.originalLength || normalizedJson.length,
-            compressedLength: result.compressedLength || result.base64.length
+            compressedLength: result.compressedLength || result.encodedString.length
         };
 
     } catch (err) {
@@ -678,7 +678,7 @@ saveButton.addEventListener('click', async () => {
         try {
             showStatus('🗜️ 正在壓縮自訂劇本...', 'info');
 
-            compressed = await compressCustomJson(normalizedJson);
+            compressed = compressCustomJson(normalizedJson);
             if (!compressed || !compressed.base64) throw new Error('壓縮結果無效');
 
             storageConfig = {

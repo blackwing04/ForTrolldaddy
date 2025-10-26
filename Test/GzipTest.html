@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>Gzip + Key Mapping + Minify 壓縮測試 (雙向還原)</title>
+  <style>
+    body { background: #111; color: #eee; font-family: Consolas, monospace; padding: 20px; }
+    h1 { color: #0ff; }
+    textarea { width: 100%; height: 200px; background: #222; color: #eee; border: 1px solid #444; padding: 8px; font-family: Consolas; }
+    button { background: #0ff; color: #111; padding: 10px 20px; border: none; cursor: pointer; font-weight: bold; margin: 10px 0; }
+    button:hover { background: #0cc; }
+    .box { background: #222; border: 1px solid #444; padding: 10px; margin: 10px 0; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>🔥 Gzip + Key Mapping 壓縮測試（可還原原始 key）</h1>
+
+  <p>請貼上你要測試的 JSON：</p>
+  <textarea id="jsonInput" placeholder="貼上 JSON..."></textarea><br>
+  <button id="compressBtn">🚀 開始壓縮測試</button>
+
+  <div id="info" class="box">等待輸入中...</div>
+  <h3>壓縮後 Base64</h3>
+  <div id="comp" class="box"></div>
+  <h3>解壓後 JSON</h3>
+  <div id="restored" class="box"></div>
+
+  <script>
+    const el = id => document.getElementById(id);
+
+    // ✅ Key 映射表（雙向）
+    const keyMap = {
+      name: 'n', ability: 'a', team: 't', description: 'd',
+      image: 'i', type: 'y', category: 'c', alignment: 'm',
+      script: 's', role: 'r', id: 'x'
+    };
+    const reverseMap = Object.fromEntries(Object.entries(keyMap).map(([k,v]) => [v,k]));
+
+    // ✅ 短 key 轉換
+    function remapKeys(obj) {
+      if (Array.isArray(obj)) return obj.map(remapKeys);
+      if (typeof obj === 'object' && obj) {
+        const out = {};
+        for (const [k, v] of Object.entries(obj))
+          out[keyMap[k] || k] = remapKeys(v);
+        return out;
+      }
+      return obj;
+    }
+
+    // ✅ 復原 key 名稱
+    function restoreKeys(obj) {
+      if (Array.isArray(obj)) return obj.map(restoreKeys);
+      if (typeof obj === 'object' && obj) {
+        const out = {};
+        for (const [k, v] of Object.entries(obj))
+          out[reverseMap[k] || k] = restoreKeys(v);
+        return out;
+      }
+      return obj;
+    }
+
+    // ✅ Gzip 壓縮
+    async function gzipCompress(str) {
+      const cs = new CompressionStream("deflate");
+      const writer = cs.writable.getWriter();
+      writer.write(new TextEncoder().encode(str));
+      writer.close();
+      const compressed = await new Response(cs.readable).arrayBuffer();
+      return btoa(String.fromCharCode(...new Uint8Array(compressed)));
+    }
+
+    // ✅ Gzip 解壓
+    async function gzipDecompress(base64) {
+      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+      const ds = new DecompressionStream("deflate");
+      const writer = ds.writable.getWriter();
+      writer.write(bytes);
+      writer.close();
+      const decompressed = await new Response(ds.readable).arrayBuffer();
+      return new TextDecoder().decode(decompressed);
+    }
+
+    async function runCompressionTest() {
+      const input = el("jsonInput").value.trim();
+      if (!input) {
+        el("info").textContent = "⚠️ 請先輸入 JSON 內容";
+        return;
+      }
+
+      el("info").textContent = "🗜️ 正在壓縮中...";
+      let jsonText = input;
+      let originalParsed = null;
+      try {
+        originalParsed = JSON.parse(input);
+        const remapped = remapKeys(originalParsed);
+        jsonText = JSON.stringify(remapped);
+      } catch (e) {
+        console.warn("輸入不是合法 JSON，將以純文字壓縮");
+      }
+
+      try {
+        const compressed = await gzipCompress(jsonText);
+        const restored = await gzipDecompress(compressed);
+
+        let restoredParsed, restoredFinal;
+        try {
+          restoredParsed = JSON.parse(restored);
+          restoredFinal = JSON.stringify(restoreKeys(restoredParsed), null, 2);
+        } catch (e) {
+          restoredFinal = restored;
+        }
+
+        const encoder = new TextEncoder();
+        const originalBytes = encoder.encode(JSON.stringify(originalParsed)).length;
+        const compressedBytes = compressed.length;
+        const ratio = ((compressedBytes / originalBytes) * 100).toFixed(1);
+        const identical = JSON.stringify(originalParsed) === JSON.stringify(JSON.parse(restoredFinal));
+
+        el("info").textContent =
+          `原始大小：${originalBytes} bytes\n` +
+          `壓縮後大小：${compressedBytes} bytes\n` +
+          `壓縮率：${ratio}%\n` +
+          `是否正確還原：${identical ? "✅ 是" : "❌ 否"}`;
+
+        el("comp").textContent = compressed;
+        el("restored").textContent = restoredFinal;
+      } catch (err) {
+        console.error("壓縮或解壓失敗：", err);
+        el("info").textContent = "❌ 錯誤：" + err.message;
+      }
+    }
+
+    el("compressBtn").addEventListener("click", runCompressionTest);
+  </script>
+</body>
+</html>
