@@ -1,75 +1,237 @@
+
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8">
-  <title>BOTC Admin</title>
-  <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
-  <style>
-    body { background: #111; color: white; font-family: "Microsoft JhengHei", sans-serif; padding: 20px; }
-    label, select, textarea, button { display: block; margin: 10px 0; width: 100%; }
-    textarea { height: 200px; font-family: monospace; }
-    #customJsonBlock { display: none; }
-    #statusMessage { margin-top: 10px; color: #0f0; }
-  </style>
+    <meta charset="UTF-8">
+    <title>BOTC Admin</title>
+    <script src="https://extension-files.twitch.tv/helper/v1/twitch-ext.min.js"></script>
+    <script src="fflate.js"></script>
+    <script src="compression.js"></script>
+    <style>
+        body {
+            background: #111;
+            color: white;
+            font-family: "Microsoft JhengHei", sans-serif;
+            padding: 20px;
+        }
+
+        label, select, textarea, button {
+            display: block;
+            margin: 10px 0;
+            width: 100%;
+        }
+
+        textarea {
+            height: 200px;
+            font-family: monospace;
+        }
+
+        #customJsonBlock {
+            display: none;
+        }
+
+        #statusMessage {
+            margin-top: 10px;
+            color: #0f0;
+        }
+    </style>
 </head>
 <body>
-  <h1>設定 BOTC Overlay 擴充功能</h1>
-  <label for="scriptList">選擇劇本：</label>
-  <select id="scriptList"></select>
+    <h1>設定 BOTC Overlay 擴充功能</h1>
+    <label for="scriptList">選擇劇本：</label>
+    <select id="scriptList"></select>
 
-  <div id="customJsonBlock">
-    <label for="customJson">自訂角色 JSON：</label>
-    <textarea id="customJson" placeholder="貼上符合 Blood on the Clocktower 格式的角色 JSON 清單"></textarea>
-  </div>
+    <div id="customJsonBlock">
+        <label for="customJson">自訂角色 JSON：</label>
+        <textarea id="customJson" placeholder="貼上符合 Blood on the Clocktower 格式的角色 JSON 清單"></textarea>
+    </div>
 
-  <button id="saveButton">儲存設定</button>
-  <div id="statusMessage"></div>
+    <button id="saveButton">儲存設定</button>
+    <div id="statusMessage"></div>
 
-  <script>
-    const scriptListEl = document.getElementById('scriptList');
-    const customJsonBlock = document.getElementById('customJsonBlock');
-    const customJsonEl = document.getElementById('customJson');
-    const saveButton = document.getElementById('saveButton');
-    const statusMessage = document.getElementById('statusMessage');
+    <script>
+        const scriptListEl = document.getElementById('scriptList');
+        const customJsonBlock = document.getElementById('customJsonBlock');
+        const customJsonEl = document.getElementById('customJson');
+        const saveButton = document.getElementById('saveButton');
+        const statusMessage = document.getElementById('statusMessage');
 
-    fetch('/Allscript/scripts.json')
-      .then(res => res.json())
-      .then(scripts => {
-        scriptListEl.innerHTML = `<option value="">-- 請選擇劇本 --</option>` +
-          scripts.map(f => `<option value="${f}">${f}</option>`).join('') +
-          `<option value="__custom__">自訂劇本</option>`;
-      });
+        const COMPRESSION_MODE = window.CompressionHelper?.COMPRESSION_MODE || 'gzip/base64';
+        const MAX_TWITCH_LIMIT = 5000; // Twitch 單段上限（bytes）
 
-    scriptListEl.addEventListener('change', () => {
-      customJsonBlock.style.display = scriptListEl.value === '__custom__' ? 'block' : 'none';
-    });
+        // 基本工具 ----------------------------------------------------------------
+        function computeScriptHash(text) {
+            let hash = 0;
+            if (!text) return '0';
+            for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+            return hash.toString(16);
+        }
 
-    saveButton.addEventListener('click', () => {
-      const selectedScript = scriptListEl.value;
-      const customJson = customJsonEl.value.trim();
-      const content = selectedScript === '__custom__'
-        ? { selectedScript, customJson, _ts: Date.now() }
-        : { selectedScript, _ts: Date.now() };
+        async function compressCustomJson(normalizedJson) {
+            const helper = window.CompressionHelper;
+            if (!helper?.compressToBase64) throw new Error('找不到 CompressionHelper');
+            return await helper.compressToBase64(normalizedJson);
+        }
 
-      if (window.Twitch?.ext?.configuration) {
-        window.Twitch.ext.configuration.set('broadcaster', '1', JSON.stringify(content));
-        statusMessage.textContent = '✅ 設定已儲存！請切換 Overlay 測試結果';
-      } else {
-        statusMessage.textContent = '❌ 無法存取 Twitch Extension API';
-      }
-    });
+        async function decompressBase64(base64, mode = COMPRESSION_MODE) {
+            const helper = window.CompressionHelper;
+            if (!helper?.decompressFromBase64) throw new Error('找不到解壓工具');
+            return await helper.decompressFromBase64(base64, mode);
+        }
 
-    if (window.Twitch?.ext) {
-      window.Twitch.ext.configuration.onChanged(() => {
-        const configStr = window.Twitch.ext.configuration.broadcaster?.content;
-        try {
-          const config = JSON.parse(configStr || '{}');
-          scriptListEl.value = config.selectedScript || '';
-          customJsonEl.value = config.customJson || '';
-          customJsonBlock.style.display = config.selectedScript === '__custom__' ? 'block' : 'none';
-        } catch {}
-      });
-    }
-  </script>
+        async function applyConfig(config) {
+            if (!config || typeof config !== 'object') return;
+            scriptListEl.value = config.selectedScript || '';
+            customJsonBlock.style.display = scriptListEl.value === '__custom__' ? 'block' : 'none';
+
+            if (config.selectedScript === '__custom__') {
+                try {
+                    let jsonText = '';
+                    if (config.hasGlobalPart) {
+                        // 若有分割 → 嘗試合併 global 段
+                        const globalStr = window.Twitch.ext.configuration.global?.content;
+                        const globalData = JSON.parse(globalStr || '{}');
+                        const mergedBase64 = (config.compressedBase64 || '') + (globalData.compressedBase64 || '');
+                        jsonText = await decompressBase64(mergedBase64, config.compression);
+                    } else if (config.compressedBase64) {
+                        jsonText = await decompressBase64(config.compressedBase64, config.compression);
+                    } else if (config.customJson) {
+                        jsonText = config.customJson;
+                    }
+                    customJsonEl.value = jsonText;
+                } catch (err) {
+                    console.warn('⚠️ 解壓縮失敗:', err);
+                    customJsonEl.value = '';
+                }
+            } else {
+                customJsonEl.value = '';
+            }
+        }
+
+        // -------------------------------------------------------------------------
+
+        fetch('Allscript/scripts.json')
+            .then(res => res.json())
+            .then(scripts => {
+                scriptListEl.innerHTML =
+                    `<option value="">-- 請選擇劇本 --</option>` +
+                    scripts.map(f => `<option value="${f}">${f}</option>`).join('') +
+                    `<option value="__custom__">自訂劇本</option>`;
+            })
+            .catch(() => (statusMessage.textContent = '❌ 無法載入劇本清單'));
+
+        scriptListEl.addEventListener('change', () => {
+            customJsonBlock.style.display = scriptListEl.value === '__custom__' ? 'block' : 'none';
+        });
+
+        // 儲存 --------------------------------------------------------------------
+        saveButton.addEventListener('click', async () => {
+            const selectedScript = scriptListEl.value;
+            if (!selectedScript) {
+                statusMessage.textContent = '❌ 請先選擇劇本';
+                return;
+            }
+            if (!window.Twitch?.ext?.configuration) {
+                statusMessage.textContent = '❌ 無法存取 Twitch Extension API';
+                return;
+            }
+
+            const timestamp = Date.now();
+            let payload = {};
+            const baseInfo = {
+                selectedScript,
+                _timestamp: timestamp,
+                scriptVersion: timestamp,
+            };
+
+            // 🧩 自訂劇本邏輯 -------------------------------------------------------
+            if (selectedScript === '__custom__') {
+                const rawJson = customJsonEl.value.trim();
+                if (!rawJson) return (statusMessage.textContent = '❌ 請貼上自訂劇本內容');
+                let normalized;
+                try {
+                    normalized = JSON.stringify(JSON.parse(rawJson));
+                } catch (err) {
+                    statusMessage.textContent = `❌ JSON 格式錯誤：${err.message}`;
+                    return;
+                }
+
+                statusMessage.textContent = '🗜️ 正在壓縮...';
+                saveButton.disabled = true;
+
+                try {
+                    const compressed = await compressCustomJson(normalized);
+                    const base64Data = compressed.base64;
+                    const overLimit = base64Data.length > MAX_TWITCH_LIMIT;
+
+                    payload = {
+                        ...baseInfo,
+                        scriptHash: computeScriptHash(normalized),
+                        compression: compressed.mode || COMPRESSION_MODE,
+                        compressedBase64: overLimit ? base64Data.slice(0, MAX_TWITCH_LIMIT) : base64Data,
+                        hasGlobalPart: overLimit,
+                    };
+
+                    // 主段上傳 ----------------------------------------------------------
+                    const payloadStr = JSON.stringify(payload);
+                    window.Twitch.ext.configuration.set('broadcaster', '1', payloadStr);
+
+                    // 分段上傳 ----------------------------------------------------------
+                    if (overLimit) {
+                        try {
+                            const globalStr = JSON.stringify({ compressedBase64: base64Data.slice(MAX_TWITCH_LIMIT) });
+                            await new Promise(r => setTimeout(r, 300));
+                            window.Twitch.ext.configuration.set('global', '1', globalStr);
+                            console.log('[Upload] broadcaster + global 分段上傳完成');
+                        } catch (err) {
+                            console.warn('[Upload] 上傳 global 段失敗:', err);
+                            statusMessage.textContent = '⚠️ 劇本超過 5KB，且無權限上傳第二段，請縮小劇本內容。';
+                        }
+                    }
+
+                    // 通知 overlay ------------------------------------------------------
+                    if (window.Twitch.ext.send) {
+                        window.Twitch.ext.send('broadcast', 'text/plain', 'CONFIG_UPDATED');
+                        console.log('[Broadcast] CONFIG_UPDATED 已發送');
+                    }
+
+                    statusMessage.textContent = '✅ 設定已儲存並同步到 Twitch！';
+                } catch (err) {
+                    console.error('壓縮或上傳錯誤:', err);
+                    statusMessage.textContent = '❌ 儲存失敗';
+                } finally {
+                    saveButton.disabled = false;
+                }
+                return;
+            }
+
+            // 🧩 內建劇本 -----------------------------------------------------------
+            payload = { ...baseInfo };
+            const payloadStr = JSON.stringify(payload);
+            try {
+                window.Twitch.ext.configuration.set('broadcaster', '1', payloadStr);
+                if (window.Twitch.ext.send)
+                    window.Twitch.ext.send('broadcast', 'text/plain', 'CONFIG_UPDATED');
+                statusMessage.textContent = '✅ 已儲存設定';
+            } catch (err) {
+                console.error('Twitch 設定儲存失敗:', err);
+                statusMessage.textContent = '❌ 儲存失敗';
+            }
+        });
+
+        // 訂閱變更 ----------------------------------------------------------------
+        if (window.Twitch?.ext) {
+            window.Twitch.ext.configuration.onChanged(async () => {
+                try {
+                    const configStr = window.Twitch.ext.configuration.broadcaster?.content;
+                    const cfg = JSON.parse(configStr || '{}');
+                    await applyConfig(cfg);
+                } catch (err) {
+                    console.warn('解析 Twitch 設定失敗:', err);
+                }
+            });
+        }
+    </script>
+
 </body>
 </html>
