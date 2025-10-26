@@ -1,11 +1,14 @@
 const express = require('express');
+
 const app = express();
 const port = process.env.PORT || 8080;
 
-app.use(express.json());
+const JSON_LIMIT = '2mb';
+
+app.use(express.json({ limit: JSON_LIMIT }));
 app.use(express.static('public'));
 
-let seatingData = {};  // 暫存座位設定
+let seatingData = {}; // 暫存座位設定
 
 app.post('/api/seating', (req, res) => {
   seatingData = req.body;
