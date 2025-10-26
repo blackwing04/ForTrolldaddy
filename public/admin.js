@@ -12,7 +12,6 @@ const LOCAL_OPTION_PREFIX = 'local:';
 const CUSTOM_NEW_OPTION = '__custom__';
 const LOCAL_LAST_CUSTOM_JSON_KEY = 'botc_last_custom_json_v1';
 const LOCAL_LAST_CONFIG_KEY = 'botc_last_overlay_config_v1';
-const MAX_COMPRESSED_CHUNK_SIZE = window.CompressionHelper?.MAX_CHUNK_SIZE || 4800;
 
 const decompressCache = new Map();
 
