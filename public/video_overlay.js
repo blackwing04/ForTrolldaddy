@@ -366,9 +366,12 @@ if (toggleButton && !isMobileLayout) {
 }
 
 async function resolveCustomScript(config, resolvedScript) {
-    if (typeof resolvedScript === 'string' && resolvedScript) return resolvedScript;
+    if (typeof resolvedScript === 'string' && resolvedScript) {
+        return resolvedScript
+        console.log('完整 resolvedScript:', resolvedScript);
+    };
     if (!config || typeof config !== 'object') return '';
-
+    console.log('完整 config:', config);
     // 🟦 新增分段支援：合併 global 段
     if (config.hasGlobalPart) {
         try {
