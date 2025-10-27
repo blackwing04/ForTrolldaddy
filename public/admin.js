@@ -692,7 +692,7 @@ saveButton.addEventListener('click', async () => {
 
             const encoder = new TextEncoder();
             const byteSize = encoder.encode(JSON.stringify({ ...storageConfig, compressedBase64: compressed.base64 })).length;
-
+            console.log('整包資訊長度:', byteSize);
             if (byteSize <= 5000) {
                 payload = { ...storageConfig, compressedBase64: compressed.base64 };
             } else {
