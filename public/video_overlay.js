@@ -106,7 +106,7 @@ async function decompressBase64WithCache(base64) {
         return typeof cached === 'string' ? cached : cached;
     }
 
-    const request = window.CompressionHelper?.decompressFromBase64
+    const request = window.CompressionHelper?.decompressFromStorableString
         ? window.CompressionHelper.decompressFromStorableString(base64)
             .then(result => {
                 decompressCache.set(cacheKey, result);
