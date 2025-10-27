@@ -113,6 +113,7 @@ async function decompressBase64WithCache(base64) {
                 return result;
             })
             .catch(err => {
+                console.error('❌ 解壓縮過程失敗:', err);
                 decompressCache.delete(cacheKey);
                 throw err;
             })
@@ -377,6 +378,7 @@ async function resolveCustomScript(config, resolvedScript) {
         try {
             const globalStr = window.Twitch?.ext?.configuration?.global?.content || '{}';
             const globalData = JSON.parse(globalStr);
+            console.log('完整 globalData:', globalData);
             const merged = (config.compressedBase64 || '') + (globalData.compressedBase64 || '');
             return await decompressBase64WithCache(merged);
         } catch (err) {
