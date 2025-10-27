@@ -692,16 +692,16 @@ saveButton.addEventListener('click', async () => {
 
             const encoder = new TextEncoder();
             const byteSize = encoder.encode(JSON.stringify({ ...storageConfig, compressedBase64: compressed.base64 })).length;
-            console.log('整包資訊長度:', byteSize);
+
             if (byteSize <= 5000) {
                 payload = { ...storageConfig, compressedBase64: compressed.base64 };
             } else {
                 // ⚙️ 超過 5KB → 分兩半
                 const half = Math.ceil(compressed.base64.length / 2);
-                storageConfig.hasGlobalPart = true;
                 payload = {
                     ...storageConfig,
-                    compressedBase64: compressed.base64.slice(0, half)
+                    compressedBase64: compressed.base64.slice(0, half),
+                    hasGlobalPart: true
                 };
                 part2 = compressed.base64.slice(half); // ✅ 區域變數儲存
             }
@@ -716,7 +716,7 @@ saveButton.addEventListener('click', async () => {
     showStatus('💾 儲存中...', 'info');
 
     try {
-        const sanitizedStorage = sanitizeConfigForStorage(storageConfig);
+        const sanitizedStorage = sanitizeConfigForStorage(storageConfig || payload);
         if (sanitizedStorage) persistLastConfig(sanitizedStorage);
 
         if (!window.Twitch?.ext?.configuration) {

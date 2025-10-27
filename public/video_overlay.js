@@ -106,14 +106,13 @@ async function decompressBase64WithCache(base64) {
         return typeof cached === 'string' ? cached : cached;
     }
 
-    const request = window.CompressionHelper?.decompressFromStorableString
+    const request = window.CompressionHelper?.decompressFromBase64
         ? window.CompressionHelper.decompressFromStorableString(base64)
             .then(result => {
                 decompressCache.set(cacheKey, result);
                 return result;
             })
             .catch(err => {
-                console.error('❌ 解壓縮過程失敗:', err);
                 decompressCache.delete(cacheKey);
                 throw err;
             })
@@ -367,18 +366,14 @@ if (toggleButton && !isMobileLayout) {
 }
 
 async function resolveCustomScript(config, resolvedScript) {
-    if (typeof resolvedScript === 'string' && resolvedScript) {
-        return resolvedScript
-        console.log('完整 resolvedScript:', resolvedScript);
-    };
+    if (typeof resolvedScript === 'string' && resolvedScript) return resolvedScript;
     if (!config || typeof config !== 'object') return '';
-    console.log('完整 config:', config);
+
     // 🟦 新增分段支援：合併 global 段
     if (config.hasGlobalPart) {
         try {
             const globalStr = window.Twitch?.ext?.configuration?.global?.content || '{}';
             const globalData = JSON.parse(globalStr);
-            console.log('完整 globalData:', globalData);
             const merged = (config.compressedBase64 || '') + (globalData.compressedBase64 || '');
             return await decompressBase64WithCache(merged);
         } catch (err) {
